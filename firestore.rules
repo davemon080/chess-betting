@@ -1,0 +1,136 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- REUSABLE SECURITY PRIMITIVES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- ENTITY VALIDATION HELPERS ---
+
+    function isValidUser(data) {
+      return data.uid is string 
+        && data.displayName is string 
+        && data.displayName.size() <= 100
+        && data.email is string 
+        && data.email.size() <= 150
+        && data.balance is number
+        && data.wins is int
+        && data.losses is int
+        && data.draws is int
+        && data.createdAt != null;
+    }
+
+    function isValidGame(data) {
+      return data.betAmount is number
+        && data.betAmount >= 0
+        && data.timeControl is string
+        && data.creatorId is string
+        && data.status is string
+        && data.status.matches('^(waiting|playing|completed|cancelled|draw)$')
+        && data.turn is string
+        && data.turn.matches('^(w|b)$')
+        && data.fen is string
+        && data.fen.size() <= 200
+        && data.moves is list
+        && data.createdAt != null
+        && data.updatedAt != null;
+    }
+
+    function isValidMessage(data) {
+      return data.userId is string
+        && data.userId == request.auth.uid
+        && data.userName is string
+        && data.userName.size() <= 100
+        && data.text is string
+        && data.text.size() <= 500
+        && data.createdAt != null;
+    }
+
+    // --- COLLECTION RULES ---
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // Allow retrieving list for leaderboard/search
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().uid == userId;
+      allow update: if isOwner(userId) && isValidUser(incoming()) && incoming().uid == userId;
+
+      // Subcollection for user notifications
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isOwner(userId);
+        allow create: if isSignedIn();
+      }
+    }
+
+    // Games Collection
+    match /games/{gameId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // Allow listing open games for lobby matchmaking
+      
+      allow create: if isSignedIn() 
+        && isValidGame(incoming()) 
+        && (incoming().creatorId == request.auth.uid)
+        && (incoming().whitePlayerId == request.auth.uid || incoming().blackPlayerId == request.auth.uid);
+
+      allow update: if isSignedIn() && (
+        // Allow anyone matching standard Game properties to update if validates
+        isValidGame(incoming()) && (
+          // Is a player in the game
+          existing().whitePlayerId == request.auth.uid ||
+          existing().blackPlayerId == request.auth.uid ||
+          // Or is the challenged player in a direct duel match
+          (existing().challengedUserId != null && existing().challengedUserId == request.auth.uid) ||
+          // Or is joining an open game where one of the player slots is vacant
+          (
+            existing().status == "waiting" &&
+            (
+              (existing().whitePlayerId == null && incoming().whitePlayerId == request.auth.uid) ||
+              (existing().blackPlayerId == null && incoming().blackPlayerId == request.auth.uid)
+            )
+          )
+        )
+      );
+
+      allow delete: if isSignedIn()
+        && (existing().creatorId == request.auth.uid)
+        && (existing().status == "waiting" || existing().status == "cancelled");
+
+      // Subcollection for Chess Chat
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (
+          get(/databases/$(database)/documents/games/$(gameId)).data.whitePlayerId == request.auth.uid ||
+          get(/databases/$(database)/documents/games/$(gameId)).data.blackPlayerId == request.auth.uid
+        );
+        allow create: if isSignedIn() 
+          && isValidMessage(incoming())
+          && (
+            get(/databases/$(database)/documents/games/$(gameId)).data.whitePlayerId == request.auth.uid ||
+            get(/databases/$(database)/documents/games/$(gameId)).data.blackPlayerId == request.auth.uid
+          );
+      }
+    }
+  }
+}

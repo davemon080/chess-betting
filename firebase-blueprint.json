@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile with balance for betting and stats",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User unique authenticated ID" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "User photo URL" },
+        "email": { "type": "string", "description": "User email" },
+        "balance": { "type": "number", "description": "User wallet balance in USD" },
+        "wins": { "type": "integer", "description": "Number of wins" },
+        "losses": { "type": "integer", "description": "Number of losses" },
+        "draws": { "type": "integer", "description": "Number of draws" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamps of user creation" }
+      },
+      "required": ["uid", "displayName", "email", "balance", "wins", "losses", "draws", "createdAt"]
+    },
+    "Game": {
+      "title": "Chess Match",
+      "description": "Chess game state document with active bets and moves",
+      "type": "object",
+      "properties": {
+        "gameId": { "type": "string" },
+        "betAmount": { "type": "number" },
+        "timeControl": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "whitePlayerId": { "type": "string" },
+        "blackPlayerId": { "type": "string" },
+        "whitePlayerName": { "type": "string" },
+        "blackPlayerName": { "type": "string" },
+        "whitePlayerPhoto": { "type": "string" },
+        "blackPlayerPhoto": { "type": "string" },
+        "status": { "type": "string", "enum": ["waiting", "playing", "completed", "cancelled", "draw"] },
+        "winnerId": { "type": "string" },
+        "turn": { "type": "string", "enum": ["w", "b"] },
+        "fen": { "type": "string" },
+        "moves": { "type": "array" },
+        "endReason": { "type": "string" },
+        "isDrawOfferedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["betAmount", "timeControl", "creatorId", "status", "turn", "fen", "moves", "createdAt", "updatedAt"]
+    },
+    "Message": {
+      "title": "Room Message",
+      "description": "Chat messages in a game room",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "text", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Collection of user records mapping uid and balance"
+    },
+    "games/{gameId}": {
+      "schema": "Game",
+      "description": "Collection of active and completed chess matches"
+    },
+    "games/{gameId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Subcollection of chat messages for active matches"
+    }
+  }
+}
