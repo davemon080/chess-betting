@@ -92,6 +92,7 @@ export const ActiveGamePanel: React.FC<ActiveGamePanelProps> = ({
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const reconnectTimeoutRef = useRef<any>(null);
 
   const [isVoiceConnected, setIsVoiceConnected] = useState<boolean>(false);
   const [isVoiceConnecting, setIsVoiceConnecting] = useState<boolean>(false);
@@ -188,6 +189,11 @@ export const ActiveGamePanel: React.FC<ActiveGamePanelProps> = ({
     let unsubCalleeCandidates: (() => void) | null = null;
     let audioCtx: AudioContext | null = null;
 
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
     const initWebRTC = async () => {
       try {
         setIsVoiceConnecting(true);
@@ -216,12 +222,34 @@ export const ActiveGamePanel: React.FC<ActiveGamePanelProps> = ({
           track.enabled = !isMuted;
         });
 
-        // 2. Build Peer Connection
+        // 2. Build Peer Connection with Enterprise-Grade TURN Traversal (using OpenRelay + Google STUNs)
         pc = new RTCPeerConnection({
           iceServers: [
-            { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-            { urls: ['stun:stun2.l.google.com:19302', 'stun:stun3.l.google.com:19302'] }
-          ]
+            { urls: [
+              'stun:stun.l.google.com:19302', 
+              'stun:stun1.l.google.com:19302',
+              'stun:stun2.l.google.com:19302',
+              'stun:stun3.l.google.com:19302',
+              'stun:stun4.l.google.com:19302',
+              'stun:openrelay.metered.ca:80'
+            ]},
+            {
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            }
+          ],
+          iceCandidatePoolSize: 10
         });
         peerConnectionRef.current = pc;
 
@@ -277,11 +305,13 @@ export const ActiveGamePanel: React.FC<ActiveGamePanelProps> = ({
                 gainNode.connect(audioCtx.destination);
 
                 // Autoplay resume safety trigger
-                if (audioCtx.state === 'suspended') {
-                  audioCtx.resume();
+                if (audioCtx.state === 'suspended' || (remoteAudioRef.current && remoteAudioRef.current.paused)) {
                   const forceResume = () => {
                     if (audioCtx && audioCtx.state === 'suspended') {
                       audioCtx.resume();
+                    }
+                    if (remoteAudioRef.current) {
+                      remoteAudioRef.current.play().catch(() => {});
                     }
                     document.removeEventListener('click', forceResume);
                     document.removeEventListener('touchstart', forceResume);
@@ -304,30 +334,46 @@ export const ActiveGamePanel: React.FC<ActiveGamePanelProps> = ({
           const cState = pc.connectionState;
           const iceState = pc.iceConnectionState;
 
+          console.log(`[WebRTC] state update -> Connection: ${cState}, ICE: ${iceState}`);
+
           if (cState === 'connected' || iceState === 'connected' || iceState === 'completed') {
             setIsVoiceConnected(true);
             setIsVoiceConnecting(false);
+            if (reconnectTimeoutRef.current) {
+              clearTimeout(reconnectTimeoutRef.current);
+              reconnectTimeoutRef.current = null;
+            }
           } else if (cState === 'connecting' || iceState === 'checking') {
             setIsVoiceConnecting(true);
           } else if (cState === 'failed' || cState === 'disconnected' || iceState === 'failed' || iceState === 'disconnected') {
             setIsVoiceConnected(false);
             setIsVoiceConnecting(false);
+
+            // Self-healing automatic reconnect: dial again after 4 seconds of failure or disconnect
+            if (!reconnectTimeoutRef.current) {
+              reconnectTimeoutRef.current = setTimeout(() => {
+                if (active) {
+                  console.log("[WebRTC] Triggering automatic reconnect attempt...");
+                  setRetryTrigger(prev => prev + 1);
+                }
+              }, 4000);
+            }
           }
         };
 
         pc.onconnectionstatechange = handleStateUpdate;
         pc.oniceconnectionstatechange = handleStateUpdate;
 
-        // 5. Dual-Role Signaling State Engine
+        // 5. Dual-Role Signaling State Engine (completely await all signal asset clearing)
         if (playerColor === 'w') {
           // White acts as WebRTC Caller
           try {
             await deleteDoc(doc(db, 'games', match.id, 'webrtc_signals', 'offer'));
             await deleteDoc(doc(db, 'games', match.id, 'webrtc_signals', 'answer'));
             const cCand = await getDocs(collection(db, 'games', match.id, 'callerCandidates'));
-            cCand.forEach(d => deleteDoc(d.ref));
+            await Promise.all(cCand.docs.map(d => deleteDoc(d.ref)));
             const clCand = await getDocs(collection(db, 'games', match.id, 'calleeCandidates'));
-            clCand.forEach(d => deleteDoc(d.ref));
+            await Promise.all(clCand.docs.map(d => deleteDoc(d.ref)));
           } catch (e) {
             console.log("No previous signaling files to purge.", e);
           }
@@ -458,6 +504,11 @@ export const ActiveGamePanel: React.FC<ActiveGamePanelProps> = ({
       setIsVoiceConnected(false);
       setIsVoiceConnecting(false);
       setIsWebRtcStarted(false);
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
 
       if (unsubAnswer) unsubAnswer();
       if (unsubOffer) unsubOffer();
