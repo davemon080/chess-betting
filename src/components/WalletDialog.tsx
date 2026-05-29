@@ -167,7 +167,7 @@ export const WalletDialog: React.FC<WalletDialogProps> = ({
                       disabled={isProcessing}
                       onChange={(e) => setCustomAmount(e.target.value)}
                       placeholder="Enter custom amount"
-                      className="w-full bg-slate-900 border border-gray-800 rounded-xl py-2.5 pl-7 pr-4 text-sm text-white focus:outline-none focus:border-amber-500 font-mono"
+                      className="w-full bg-slate-900 border border-gray-800 rounded-xl py-2.5 pl-7 pr-4 text-base text-white focus:outline-none focus:border-amber-500 font-mono"
                     />
                   </div>
                   <button

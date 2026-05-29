@@ -11,6 +11,11 @@ export interface UserProfile {
   status?: 'online' | 'offline';
   lastActiveAt?: number;
   createdAt: any;
+  savedBankCode?: string;
+  savedBankName?: string;
+  savedAccountNumber?: string;
+  savedAccountName?: string;
+  rank?: number | string;
 }
 
 export interface NotificationItem {
@@ -44,6 +49,10 @@ export interface ChessMatch {
   drawDeclinedBy?: string | null;
   challengedUserId?: string | null;
   challengedUserName?: string | null;
+  whiteTime?: number;
+  blackTime?: number;
+  lastMoveTime?: number;
+  spectatorsList?: string[];
   createdAt: any;
   updatedAt: any;
 }

@@ -1,10 +1,10 @@
 {
-  "projectId": "pacific-impulse-rcf5x",
-  "appId": "1:379514003115:web:ff3f48034191d34d2021ee",
-  "apiKey": "AIzaSyC1sU2XIST1vi1IZXYja8dLTcN8krWvJ2g",
-  "authDomain": "pacific-impulse-rcf5x.firebaseapp.com",
+  "projectId": "chess-497dd",
+  "appId": "1:983125158849:web:ef9e140646143a26169d40",
+  "apiKey": "AIzaSyBgpcKAPIEnzdcx2zeyF9S7-6SIn3wy1tU",
+  "authDomain": "chess-497dd.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-92c18874-395c-4ac2-b943-54af17a959a3",
-  "storageBucket": "pacific-impulse-rcf5x.firebasestorage.app",
-  "messagingSenderId": "379514003115",
+  "storageBucket": "chess-497dd.firebasestorage.app",
+  "messagingSenderId": "983125158849",
   "measurementId": ""
 }

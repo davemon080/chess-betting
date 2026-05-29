@@ -96,7 +96,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({
         </div>
       </div>
 
-      <div className="bg-[#111827] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6">
+      <div className="space-y-6">
         
         {/* Module Title controls */}
         <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 pb-4 border-b border-gray-800">

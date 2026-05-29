@@ -21,7 +21,7 @@ import {
   writeBatch,
   increment
 } from 'firebase/firestore';
-import { onAuthStateChanged, signInWithPopup, signOut, signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { Chess } from 'chess.js';
 import { ShieldCheck, LogOut, Wallet, User, Swords, ShieldAlert, Award, Sparkles, Coins, Gamepad2, Bell, Check, Copy } from 'lucide-react';
 
@@ -34,6 +34,19 @@ import { WalletDialog } from './components/WalletDialog';
 import { ProfilePage } from './components/ProfilePage';
 import { ActiveUsersPanel } from './components/ActiveUsersPanel';
 import { NotificationsPage } from './components/NotificationsPage';
+import { AdminPanel } from './components/AdminPanel';
+
+const generateMatchId = (): string => {
+  const chars = 'abcdefghijklmnopqrstuvwxyz';
+  const seg = (len: number) => {
+    let s = '';
+    for (let i = 0; i < len; i++) {
+      s += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return s;
+  };
+  return `${seg(3)}-${seg(3)}-${seg(4)}`;
+};
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -47,6 +60,7 @@ export default function App() {
   
   const [showWallet, setShowWallet] = useState<boolean>(false);
   const [showProfilePage, setShowProfilePage] = useState<boolean>(false);
+  const [showAdminPage, setShowAdminPage] = useState<boolean>(false);
   const [selectedProfile, setSelectedProfile] = useState<UserProfile | null>(null);
   const [gladiatorPage, setGladiatorPage] = useState<boolean>(false);
   const [isLobbyLoading, setIsLobbyLoading] = useState<boolean>(false);
@@ -55,10 +69,18 @@ export default function App() {
   const [guestNameInput, setGuestNameInput] = useState<string>('');
   const [isLoggingInAnonymously, setIsLoggingInAnonymously] = useState<boolean>(false);
 
+  // Email and custom credential states
+  const [emailInput, setEmailInput] = useState<string>('');
+  const [passwordInput, setPasswordInput] = useState<string>('');
+  const [registerNickname, setRegisterNickname] = useState<string>('');
+  const [isSignUpMode, setIsSignUpMode] = useState<boolean>(false);
+  const [isEmailLoading, setIsEmailLoading] = useState<boolean>(false);
+  const [authTab, setAuthTab] = useState<'email' | 'guest'>('email');
+
   const [showNotificationsPage, setShowNotificationsPage] = useState<boolean>(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  const [gameOutcomeAlert, setGameOutcomeAlert] = useState<{ winnerId?: string; status: string; endReason: string; betAmount: number } | null>(null);
+  const [gameOutcomeAlert, setGameOutcomeAlert] = useState<{ winnerId?: string; winnerName?: string; status: string; endReason: string; betAmount: number } | null>(null);
   const [drawDeclinedAlert, setDrawDeclinedAlert] = useState<boolean>(false);
 
   // 1. Auth states observer
@@ -80,13 +102,13 @@ export default function App() {
             }
             const defaultName = savedTempName || user.displayName || user.email?.split('@')[0] || 'Chess Gladiator';
 
-            // First time registration: credit $1,000 for sandboxed betting!
+            // First time registration: Initialize empty balance till user deposit!
             const newProfile: UserProfile = {
               uid: user.uid,
               displayName: defaultName,
               photoURL: user.photoURL || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${user.uid}`,
               email: user.email || '',
-              balance: 1000.00,
+              balance: 0.00,
               wins: 0,
               losses: 0,
               draws: 0,
@@ -102,7 +124,7 @@ export default function App() {
             const welcomeNotif: NotificationItem = {
               id: 'welcome-seed',
               title: 'Welcome Gladiator!',
-              message: 'Your registration on Chess Gladiators clearings is successful. You have been credited with ₦1,000.00 for sandboxed betting!',
+              message: 'Your registration on Chess Gladiators clearings is successful. All new wallets are empty; make your first deposit to start placement!',
               createdAt: new Date(),
               read: false,
               type: 'success'
@@ -135,6 +157,28 @@ export default function App() {
 
     return () => unsubscribe();
   }, []);
+
+  // Periodic online presence heartbeat (every 60 seconds) maintaining active user directories
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    // Perform heartbeat immediately
+    const performHeartbeat = async () => {
+      try {
+        const profileRef = doc(db, 'users', currentUser.uid);
+        await updateDoc(profileRef, {
+          status: 'online',
+          lastActiveAt: Date.now()
+        });
+      } catch (e) {
+        console.warn("Heartbeat update failed to verify status.");
+      }
+    };
+    
+    performHeartbeat();
+    const intervalId = setInterval(performHeartbeat, 60000);
+    return () => clearInterval(intervalId);
+  }, [currentUser]);
 
   // 2. Real-time User Profile observer
   useEffect(() => {
@@ -482,16 +526,32 @@ export default function App() {
             }
           }
 
+          // Retrieve winner's displayName dynamically from players slots
+          let winnerDisplayName: string | undefined = undefined;
+          if (item.status === 'completed' && item.winnerId) {
+            if (item.winnerId === item.whitePlayerId) {
+              winnerDisplayName = item.whitePlayerName || 'White Player';
+            } else if (item.winnerId === item.blackPlayerId) {
+              winnerDisplayName = item.blackPlayerName || 'Black Player';
+            } else if (item.winnerId === 'computer_ai') {
+              winnerDisplayName = 'Deep AI Engine';
+            }
+          }
+
           // Trigger screen outcome indicator popup
           setGameOutcomeAlert({
             winnerId: item.winnerId || undefined,
+            winnerName: winnerDisplayName,
             status: item.status,
             endReason: item.endReason || 'Game completed.',
             betAmount: item.betAmount,
           });
 
-          // Redirect back to landing page dashboard immediately
-          setActiveMatch(null);
+          // Keep the activeMatch loaded in state so both players can inspect the completed chessboard
+          setActiveMatch({
+            id: snap.id,
+            ...item,
+          } as ChessMatch);
           return;
         }
 
@@ -528,6 +588,45 @@ export default function App() {
       unsubscribeMsgs();
     };
   }, [currentUser, activeMatch?.id]);
+
+  // Play victory chime and pronounce winner name
+  useEffect(() => {
+    if (gameOutcomeAlert && gameOutcomeAlert.status === 'completed' && gameOutcomeAlert.winnerName) {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          const ctx = new AudioContextClass();
+          const now = ctx.currentTime;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(523.25, now); // C5
+          osc.frequency.setValueAtTime(659.25, now + 0.12); // E5
+          osc.frequency.setValueAtTime(783.99, now + 0.24); // G5
+          osc.frequency.setValueAtTime(1046.50, now + 0.36); // C6
+          
+          gain.gain.setValueAtTime(0.15, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+          
+          osc.start(now);
+          osc.stop(now + 0.7);
+        }
+        
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const msg = new SpeechSynthesisUtterance(`Victory. ${gameOutcomeAlert.winnerName} wins the chess match!`);
+          msg.rate = 1.0;
+          window.speechSynthesis.speak(msg);
+        }
+      } catch (err) {
+        console.warn("Victory chime error:", err);
+      }
+    }
+  }, [gameOutcomeAlert]);
 
   // Computer AI Opponent automated moves resolver
   useEffect(() => {
@@ -620,6 +719,9 @@ export default function App() {
       }
 
       const matchId = `comp-${currentUser.uid}-${Date.now()}`;
+      const minutes = parseInt(timeControl);
+      const seconds = isNaN(minutes) ? 900 : minutes * 60;
+
       const compMatch: ChessMatch = {
         id: matchId,
         creatorId: currentUser.uid,
@@ -639,6 +741,9 @@ export default function App() {
         endReason: null,
         isDrawOfferedBy: null,
         drawDeclinedBy: null,
+        whiteTime: seconds,
+        blackTime: seconds,
+        lastMoveTime: Date.now(),
         createdAt: new Date() as any, // fallback local time
         updatedAt: new Date() as any,
       };
@@ -687,6 +792,55 @@ export default function App() {
     }
   };
 
+  // Secure Email & Password Sign Up and Sign In Handler
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!emailInput.trim() || !passwordInput.trim()) {
+      setErrorMessage("Please enter both email and password.");
+      return;
+    }
+    setErrorMessage(null);
+    setIsEmailLoading(true);
+
+    try {
+      if (isSignUpMode) {
+        if (!registerNickname.trim()) {
+          setErrorMessage("Please choose a profile nickname.");
+          setIsEmailLoading(false);
+          return;
+        }
+        // Save nickname temporarily so the profile observer can use it
+        localStorage.setItem('temp_guest_nickname', registerNickname.trim());
+        const userCredential = await createUserWithEmailAndPassword(auth, emailInput.trim(), passwordInput);
+        if (userCredential.user) {
+          await updateProfile(userCredential.user, {
+            displayName: registerNickname.trim()
+          });
+        }
+      } else {
+        await signInWithEmailAndPassword(auth, emailInput.trim(), passwordInput);
+      }
+    } catch (e: any) {
+      console.error("Email auth error:", e);
+      if (e.code === 'auth/email-already-in-use') {
+        setErrorMessage("This email address is already in use. Please sign in instead.");
+      } else if (e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' || e.code === 'auth/user-not-found' || e.code === 'auth/invalid-email') {
+        setErrorMessage("Invalid email or password combination.");
+      } else if (e.code === 'auth/weak-password') {
+        setErrorMessage("Password is too weak. Must be at least 6 characters.");
+      } else if (e.code === 'auth/operation-not-allowed') {
+        const pId = auth.app.options.projectId || "your-firebase-project";
+        setErrorMessage(
+          `The Email/Password sign-in provider is disabled in the Firebase Console for your project ("${pId}"). To fix this: 1. Go to console.firebase.google.com/project/${pId}/authentication/providers 2. Click 'Add new provider' and select 'Email/Password'. 3. Enable it, click Save, and try again!`
+        );
+      } else {
+        setErrorMessage(e?.message || "Verification auth login aborted.");
+      }
+    } finally {
+      setIsEmailLoading(false);
+    }
+  };
+
   // Auth logouts
   const handleLogout = async () => {
     try {
@@ -704,12 +858,35 @@ export default function App() {
   };
 
   // Deposit credit dialog transaction
-  const handleDepositWallet = async (amount: number) => {
+  const handleDepositWallet = async (amount: number, reference?: string, bankName?: string) => {
     if (!currentUser || !userProfile) return;
     const profileRef = doc(db, 'users', currentUser.uid);
     try {
       await updateDoc(profileRef, {
         balance: userProfile.balance + amount,
+      });
+
+      // Write clearance record log under the clearance subcollection
+      const refId = reference || `dep_${Math.random().toString(36).substring(2, 10).toUpperCase()}_${Date.now()}`;
+      const logRef = doc(db, 'users', currentUser.uid, 'clearance', refId);
+      await setDoc(logRef, {
+        reference: refId,
+        type: 'deposit',
+        amount,
+        status: 'completed',
+        description: `Paystack Deposit (Ref: ${refId})`,
+        bankName: bankName || 'Paystack checkout',
+        createdAt: Date.now(),
+      });
+
+      // Create a notification for the credit
+      const notificationsRef = collection(db, 'users', currentUser.uid, 'notifications');
+      await addDoc(notificationsRef, {
+        title: 'Deposit Credited!',
+        message: `Your balance has been successfully credited with ₦${amount.toLocaleString()} via Paystack!`,
+        createdAt: new Date(),
+        read: false,
+        type: 'success'
       });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `users/${currentUser.uid}`);
@@ -717,18 +894,112 @@ export default function App() {
   };
 
   // Withdraw credit transaction from bank settlement form
-  const handleWithdrawFunds = async (amount: number) => {
+  const handleWithdrawFunds = async (
+    amount: number,
+    bankName?: string,
+    accountNumber?: string,
+    accountName?: string,
+    bankCode?: string,
+    saveBankDetails?: boolean,
+    payoutStatus?: string,
+    payoutRef?: string
+  ) => {
     if (!currentUser || !userProfile) return;
     if (userProfile.balance < amount) {
       throw new Error("Insufficient account balance for withdrawal.");
     }
     const profileRef = doc(db, 'users', currentUser.uid);
     try {
-      await updateDoc(profileRef, {
+      const updatePayload: any = {
         balance: userProfile.balance - amount,
+      };
+
+      if (saveBankDetails) {
+        updatePayload.savedBankCode = bankCode || "";
+        updatePayload.savedBankName = bankName || "";
+        updatePayload.savedAccountNumber = accountNumber || "";
+        updatePayload.savedAccountName = accountName || "";
+      }
+
+      await updateDoc(profileRef, updatePayload);
+
+      // Write clearance record log under the clearance subcollection
+      const refId = `with_${Date.now()}_${Math.random().toString(36).substring(4)}`;
+      const logRef = doc(db, 'users', currentUser.uid, 'clearance', refId);
+      
+      const isCompleted = payoutStatus === 'completed';
+
+      await setDoc(logRef, {
+        reference: payoutRef || refId,
+        type: 'withdrawal',
+        amount,
+        status: isCompleted ? 'completed' : 'pending',
+        description: isCompleted 
+          ? `Payout transfer of ₦${amount.toLocaleString()} was successfully completed & processed to ${bankName || 'bank'} (${accountNumber || ''}).`
+          : `Withdrawal request of ₦${amount.toLocaleString()} queued to ${bankName || 'bank'} (${accountNumber || ''}). It will be processed in less than 24 hours.`,
+        bankName: bankName || 'Central Bank clears',
+        accountNumber: accountNumber || '',
+        accountName: accountName || '',
+        bankCode: bankCode || '',
+        createdAt: Date.now(),
+        completedAt: isCompleted ? Date.now() : null
+      });
+
+      // Create a notification for the withdrawal request
+      const notificationsRef = collection(db, 'users', currentUser.uid, 'notifications');
+      await addDoc(notificationsRef, {
+        title: isCompleted ? 'Withdrawal Completed' : 'Withdrawal Pending',
+        message: isCompleted 
+          ? `Your withdrawal of ₦${amount.toLocaleString()} has been successfully processed and paid!`
+          : `Your withdrawal request of ₦${amount.toLocaleString()} has been queued and will be processed in less than 24 hours.`,
+        createdAt: new Date(),
+        read: false,
+        type: isCompleted ? 'success' : 'warning'
       });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `users/${currentUser.uid}`);
+      throw e;
+    }
+  };
+
+  // Admin only: Reset all existing user balances to 0 in firestore atomically / batch-wise
+  const handleResetAllBalances = async () => {
+    if (!currentUser) return;
+    try {
+      const colRef = collection(db, 'users');
+      const snap = await getDocs(colRef);
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => {
+        const userRef = doc(db, 'users', d.id);
+        batch.update(userRef, { balance: 0.00 });
+      });
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, 'users');
+      throw e;
+    }
+  };
+
+  // Admin only: Update a specific user's balance directly
+  const handleUpdateUserBalance = async (targetUserId: string, newBalance: number) => {
+    if (!currentUser || userProfile?.email !== 'simonodavido@gmail.com') return;
+    try {
+      const targetUserRef = doc(db, 'users', targetUserId);
+      await updateDoc(targetUserRef, { balance: newBalance });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `users/${targetUserId}`);
+      throw e;
+    }
+  };
+
+  // Admin only: Update specific user stats (wins, losses, draws, rating)
+  const handleUpdateUserStats = async (targetUserId: string, wins: number, losses: number, draws: number, rating: number) => {
+    if (!currentUser || userProfile?.email !== 'simonodavido@gmail.com') return;
+    try {
+      const targetUserRef = doc(db, 'users', targetUserId);
+      await updateDoc(targetUserRef, { wins, losses, draws, rating });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `users/${targetUserId}`);
       throw e;
     }
   };
@@ -841,7 +1112,8 @@ export default function App() {
         newMatchData.whitePlayerPhoto = null;
       }
 
-      const matchRef = doc(collection(db, 'games'));
+      const newId = generateMatchId();
+      const matchRef = doc(db, 'games', newId);
       const profileRef = doc(db, 'users', currentUser.uid);
 
       const batch = writeBatch(db);
@@ -850,12 +1122,12 @@ export default function App() {
         balance: userProfile.balance - betAmount
       });
       // Set the match doc
-      batch.set(matchRef, newMatchData);
+      batch.set(matchRef, { id: newId, ...newMatchData });
 
       await batch.commit();
 
       setActiveMatch({
-        id: matchRef.id,
+        id: newId,
         ...newMatchData,
       } as ChessMatch);
 
@@ -918,7 +1190,8 @@ export default function App() {
         newMatchData.whitePlayerPhoto = null;
       }
 
-      const matchRef = doc(collection(db, 'games'));
+      const newId = generateMatchId();
+      const matchRef = doc(db, 'games', newId);
       const profileRef = doc(db, 'users', currentUser.uid);
 
       const batch = writeBatch(db);
@@ -927,7 +1200,7 @@ export default function App() {
         balance: userProfile.balance - betAmount
       });
       // Set the match doc
-      batch.set(matchRef, newMatchData);
+      batch.set(matchRef, { id: newId, ...newMatchData });
 
       await batch.commit();
 
@@ -940,7 +1213,7 @@ export default function App() {
       );
 
       setActiveMatch({
-        id: matchRef.id,
+        id: newId,
         ...newMatchData,
       } as ChessMatch);
 
@@ -1039,10 +1312,16 @@ export default function App() {
         balance: userProfile.balance - match.betAmount
       });
 
+      const mins = parseInt(match.timeControl) || 15;
+      const seconds = match.timeControl === 'unlimited' ? 999999 : mins * 60;
+
       // 2. Setup game update payload
       const updatePayload: any = {
         status: 'playing',
         updatedAt: serverTimestamp(),
+        whiteTime: seconds,
+        blackTime: seconds,
+        lastMoveTime: Date.now(),
       };
 
       if (vacantSide === 'w') {
@@ -1100,11 +1379,30 @@ export default function App() {
     const updatedMoves = [...(activeMatch.moves || []), moveNotation];
     const nextTurn = gameEngine.turn(); // 'w' or 'b'
 
+    const now = Date.now();
+    const lastMove = activeMatch.lastMoveTime || now;
+    const elapsed = Math.round((now - lastMove) / 1000);
+
+    const minsControl = parseInt(activeMatch.timeControl) || 15;
+    const defaultSecs = activeMatch.timeControl === 'unlimited' ? 999999 : minsControl * 60;
+    let newWhiteTime = typeof activeMatch.whiteTime === 'number' ? activeMatch.whiteTime : defaultSecs;
+    let newBlackTime = typeof activeMatch.blackTime === 'number' ? activeMatch.blackTime : defaultSecs;
+
+    // Subtract elapsed time from moving player
+    if (activeMatch.turn === 'w') {
+      newWhiteTime = Math.max(0, newWhiteTime - elapsed);
+    } else {
+      newBlackTime = Math.max(0, newBlackTime - elapsed);
+    }
+
     const matchRef = doc(db, 'games', activeMatch.id);
     const updatePayload: any = {
       fen: newFen,
       moves: updatedMoves,
       turn: nextTurn,
+      whiteTime: newWhiteTime,
+      blackTime: newBlackTime,
+      lastMoveTime: now,
       updatedAt: serverTimestamp(),
     };
 
@@ -1316,38 +1614,147 @@ export default function App() {
             {/* OR separator */}
             <div className="flex items-center justify-center gap-3">
               <div className="h-[1px] bg-gray-800 flex-1" />
-              <span className="text-[10px] font-mono uppercase tracking-widest text-gray-500 font-bold">OR PLAY AS GUEST</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-gray-500 font-bold">OR CHOOSE PORTAL</span>
               <div className="h-[1px] bg-gray-800 flex-1" />
             </div>
 
-            {/* Guest Sandbox/Anonymous Section */}
-            <form onSubmit={handleGuestLogin} className="bg-slate-950/40 border border-gray-900 rounded-2xl p-4 text-left space-y-3">
-              <div>
-                <label className="block text-[10px] uppercase font-mono tracking-wide text-gray-400 mb-1.5 font-semibold">
-                  Choose Custom Chess Handle
-                </label>
-                <input
-                  type="text"
-                  maxLength={16}
-                  value={guestNameInput}
-                  onChange={(e) => setGuestNameInput(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
-                  placeholder="e.g. KasparovGuest, ChessKnight"
-                  className="w-full font-mono bg-slate-950 rounded-xl border border-gray-800 px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition"
-                />
-                <span className="text-[9px] text-gray-500 mt-1 block leading-relaxed">
-                  Letters, numbers, and underscores only. Generates a random name if left empty.
-                </span>
-              </div>
-
+            {/* Tab Swapper */}
+            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-xl border border-gray-900">
               <button
-                type="submit"
-                disabled={isLoggingInAnonymously}
-                className="w-full bg-gray-900 border border-gray-800 hover:bg-gray-800/80 disabled:opacity-50 transition p-2.5 rounded-xl text-gray-300 font-semibold cursor-pointer text-xs flex items-center justify-center gap-2 active:scale-98 duration-100"
+                type="button"
+                onClick={() => {
+                  setAuthTab('email');
+                  setErrorMessage(null);
+                }}
+                className={`py-2 text-[10px] sm:text-xs font-mono uppercase tracking-wider rounded-lg font-bold transition duration-150 cursor-pointer ${
+                  authTab === 'email'
+                    ? 'bg-amber-500 text-slate-950 shadow-md'
+                    : 'text-gray-400 hover:text-white'
+                }`}
               >
-                <Gamepad2 className="w-4 h-4 text-amber-500" />
-                {isLoggingInAnonymously ? 'Entering Board...' : 'Instant Guest Chess Duel (No Popups)'}
+                Email Portal
               </button>
-            </form>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthTab('guest');
+                  setErrorMessage(null);
+                }}
+                className={`py-2 text-[10px] sm:text-xs font-mono uppercase tracking-wider rounded-lg font-bold transition duration-150 cursor-pointer ${
+                  authTab === 'guest'
+                    ? 'bg-amber-500 text-slate-950 shadow-md'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Guest Duel
+              </button>
+            </div>
+
+            {/* Email Portal */}
+            {authTab === 'email' && (
+              <form onSubmit={handleEmailAuth} className="bg-slate-950/40 border border-gray-900 rounded-2xl p-4 text-left space-y-3.5">
+                <div className="flex items-center justify-between border-b border-gray-900 pb-2 mb-1">
+                  <span className="text-[10px] font-mono tracking-wider font-extrabold text-amber-500 uppercase">
+                    {isSignUpMode ? 'Register Gladiator' : 'Email Security Sign-in'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSignUpMode(!isSignUpMode);
+                      setErrorMessage(null);
+                    }}
+                    className="text-[10.5px] font-bold text-amber-450 hover:text-amber-300 transition underline cursor-pointer"
+                  >
+                    {isSignUpMode ? 'Sign In Instead' : 'Create Account'}
+                  </button>
+                </div>
+
+                {isSignUpMode && (
+                  <div>
+                    <label className="block text-[10px] uppercase font-mono tracking-wide text-gray-400 mb-1 font-semibold">
+                      Account Nickname
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={16}
+                      required
+                      value={registerNickname}
+                      onChange={(e) => setRegisterNickname(e.target.value.replace(/[^a-zA-Z0-9_ ]/g, ''))}
+                      placeholder="e.g. Kasparov_7"
+                      className="w-full font-mono bg-slate-950 rounded-xl border border-gray-800 px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] uppercase font-mono tracking-wide text-gray-400 mb-1 font-semibold">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full font-mono bg-slate-950 rounded-xl border border-gray-800 px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase font-mono tracking-wide text-gray-400 mb-1 font-semibold">
+                    Security Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full font-mono bg-slate-950 rounded-xl border border-gray-800 px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isEmailLoading}
+                  className="w-full bg-slate-900 border border-gray-800 hover:bg-slate-800/80 disabled:opacity-50 transition p-2.5 rounded-xl text-gray-300 font-semibold cursor-pointer text-xs flex items-center justify-center gap-2 active:scale-98 duration-100"
+                >
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  {isEmailLoading ? 'Verifying Credentials...' : isSignUpMode ? 'Register & Enter Arena' : 'Authorize Secure Session'}
+                </button>
+              </form>
+            )}
+
+            {/* Guest Sandbox/Anonymous Section */}
+            {authTab === 'guest' && (
+              <form onSubmit={handleGuestLogin} className="bg-slate-950/40 border border-gray-900 rounded-2xl p-4 text-left space-y-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-mono tracking-wide text-gray-400 mb-1.5 font-semibold">
+                    Choose Custom Chess Handle
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={16}
+                    value={guestNameInput}
+                    onChange={(e) => setGuestNameInput(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                    placeholder="e.g. KasparovGuest, ChessKnight"
+                    className="w-full font-mono bg-slate-950 rounded-xl border border-gray-800 px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-amber-500/50 transition"
+                  />
+                  <span className="text-[9px] text-gray-500 mt-1 block leading-relaxed">
+                    Letters, numbers, and underscores only. Generates a random name if left empty.
+                  </span>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoggingInAnonymously}
+                  className="w-full bg-gray-900 border border-gray-800 hover:bg-gray-800/80 disabled:opacity-50 transition p-2.5 rounded-xl text-gray-300 font-semibold cursor-pointer text-xs flex items-center justify-center gap-2 active:scale-98 duration-100"
+                >
+                  <Gamepad2 className="w-4 h-4 text-amber-500" />
+                  {isLoggingInAnonymously ? 'Entering Board...' : 'Instant Guest Chess Duel (No Popups)'}
+                </button>
+              </form>
+            )}
           </div>
 
           <div className="pt-2 text-[9px] font-mono text-gray-600 tracking-wider uppercase">
@@ -1359,53 +1766,56 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0c0e12] select-none text-gray-200 font-sans pb-12 flex flex-col relative">
+    <div className="min-h-screen bg-[#0c0e12] select-none text-gray-200 font-sans pb-12 flex flex-col relative w-full overflow-x-hidden">
       
       {/* Decorative linear grids */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#111827_1px,transparent_1px),linear-gradient(to_bottom,#111827_1px,transparent_1px)] bg-[size:5rem_5rem] bg-repeat-y opacity-10 pointer-events-none" />
 
       {/* Main Header navigation */}
-      <header className="sticky top-0 z-40 bg-[#0d1117]/80 backdrop-blur-md border-b border-gray-900/80 px-4 py-3">
-        <div className="max-w-7xl mx-auto flex justify-between items-center gap-4">
+      <header className="sticky top-0 z-40 bg-[#0d1117]/90 backdrop-blur-md border-b border-gray-900 px-3 sm:px-6 py-2.5 sm:py-3.5 w-full transition duration-150 shadow-lg">
+        <div className="max-w-7xl mx-auto flex justify-between items-center gap-3 sm:gap-6">
           
           {/* Brand logo & nav tabs */}
-          <div className="flex items-center space-x-4 sm:space-x-8">
+          <div className="flex items-center space-x-2 xs:space-x-4 sm:space-x-8 min-w-0 flex-1 sm:flex-initial">
             <div 
               onClick={() => {
                 if (!activeMatch) {
                   setShowProfilePage(false);
                   setShowNotificationsPage(false);
                   setGladiatorPage(false);
+                  setShowAdminPage(false);
                 }
               }}
-              className="flex items-center space-x-2 cursor-pointer"
+              className="flex items-center space-x-2 sm:space-x-2.5 cursor-pointer shrink-0 group active:scale-98 transition duration-100"
+              title="Return to lobby"
             >
-              <div className="w-9 h-9 bg-gradient-to-tr from-amber-500 to-yellow-600 rounded-xl flex items-center justify-center border border-amber-400/20 shadow-md">
-                <Swords className="w-5 h-5 text-slate-950" />
+              <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-tr from-amber-500 to-yellow-600 rounded-xl flex items-center justify-center border border-amber-400/20 shadow-md group-hover:shadow-amber-500/20 duration-150 shrink-0">
+                <Swords className="w-5 h-5 text-slate-950 transition duration-300 group-hover:rotate-12" />
               </div>
               <div className="hidden xs:block">
-                <span className="font-display font-bold text-sm tracking-tight text-white block">
+                <span className="font-display font-black text-xs sm:text-sm tracking-tight text-white block group-hover:text-amber-400 transition">
                   Sovereign Chess
                 </span>
-                <span className="text-[8px] font-mono text-amber-500 uppercase tracking-widest block font-bold">
-                  Online Bet System
+                <span className="text-[7.5px] sm:text-[8px] font-mono text-amber-500 uppercase tracking-widest block font-bold leading-none mt-0.5">
+                  Online Arena
                 </span>
               </div>
             </div>
 
-            {/* Premium Navigation Tabs */}
+            {/* Premium Navigation Tabs with responsive padding and comfortable touch sizes */}
             {currentUser && !activeMatch && (
-              <nav className="flex items-center space-x-1 bg-slate-950/40 p-1 border border-gray-900 rounded-xl">
+              <nav className="flex items-center space-x-1 bg-slate-950/60 p-1 border border-gray-900 rounded-xl shrink min-w-0">
                 <button
                   onClick={() => {
                     setShowProfilePage(false);
                     setShowNotificationsPage(false);
                     setGladiatorPage(false);
+                    setShowAdminPage(false);
                   }}
-                  className={`px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                    !showProfilePage && !showNotificationsPage && !gladiatorPage
-                      ? 'bg-zinc-850 text-amber-500 font-bold border-gray-700/50'
-                      : 'text-gray-400 hover:text-white'
+                  className={`px-2 py-1.5 sm:px-3.5 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold font-mono transition cursor-pointer shrink-0 min-h-[34px] flex items-center justify-center ${
+                    !showProfilePage && !showNotificationsPage && !gladiatorPage && !showAdminPage
+                      ? 'bg-zinc-850 text-amber-500 border border-gray-750/30 font-black'
+                      : 'text-gray-400 hover:text-white hover:bg-slate-900/40'
                   }`}
                 >
                   War Room
@@ -1415,41 +1825,70 @@ export default function App() {
                     setShowProfilePage(false);
                     setShowNotificationsPage(false);
                     setGladiatorPage(true);
+                    setShowAdminPage(false);
                   }}
-                  className={`px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                    !showProfilePage && !showNotificationsPage && gladiatorPage
-                      ? 'bg-zinc-850 text-amber-500 font-bold border-gray-700/50'
-                      : 'text-gray-400 hover:text-white'
+                  className={`px-2 py-1.5 sm:px-3.5 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold font-mono transition cursor-pointer shrink-0 min-h-[34px] flex items-center justify-center ${
+                    !showProfilePage && !showNotificationsPage && gladiatorPage && !showAdminPage
+                      ? 'bg-zinc-850 text-amber-500 border border-gray-750/30 font-black'
+                      : 'text-gray-400 hover:text-white hover:bg-slate-900/40'
                   }`}
                 >
                   Players
                 </button>
+                {userProfile?.email === 'simonodavido@gmail.com' && (
+                  <button
+                    onClick={() => {
+                      setShowProfilePage(false);
+                      setShowNotificationsPage(false);
+                      setGladiatorPage(false);
+                      setShowAdminPage(true);
+                    }}
+                    className={`px-1.5 py-1.5 sm:px-3 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition cursor-pointer flex items-center gap-1 shrink-0 min-h-[34px] ${
+                      showAdminPage
+                        ? 'bg-red-950/40 text-red-400 border border-red-900/50'
+                        : 'text-red-400/70 hover:text-red-300 hover:bg-red-950/20'
+                    }`}
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                    <span className="hidden sm:inline">Admin Panel</span>
+                    <span className="sm:hidden">Admin</span>
+                  </button>
+                )}
               </nav>
             )}
           </div>
 
-          {/* User account dashboard, balance, and reload action */}
+          {/* User account dashboard, balance, and quick actions */}
           {userProfile && (
-            <div className="flex items-center space-x-1.5 sm:space-x-3">
+            <div className="flex items-center space-x-1.5 sm:space-x-3.5 shrink-0">
               
               {/* Virtual wallet balance indicator block with integrated profile icon */}
               <div 
-                onClick={() => setShowProfilePage(true)}
-                className="bg-slate-950 hover:border-emerald-500/50 transition duration-150 border border-gray-900 pl-1 p-1 pr-2 sm:pr-3 rounded-lg sm:rounded-xl flex items-center space-x-1.5 sm:space-x-2 cursor-pointer select-none"
-                title="View Arena Profile"
+                onClick={() => {
+                  setShowProfilePage(true);
+                  setShowAdminPage(false);
+                  setShowNotificationsPage(false);
+                  setGladiatorPage(false);
+                }}
+                className={`bg-slate-950 border transition duration-200 px-2 py-1.5 sm:px-3.5 sm:py-2 rounded-xl flex items-center space-x-2 cursor-pointer select-none shrink-0 ${
+                  showProfilePage 
+                    ? 'border-amber-500/80 shadow-inner' 
+                    : 'border-gray-900 hover:border-emerald-500/40 hover:bg-[#111827]/40'
+                }`}
+                title="View Arena Profile & Wallet"
               >
                 <img
                   src={userProfile.photoURL}
                   alt={userProfile.displayName}
                   referrerPolicy="no-referrer"
-                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-md sm:rounded-lg border border-gray-800"
+                  className="w-6 h-6 sm:w-7.5 sm:h-7.5 rounded-lg border border-gray-800 shrink-0 shadow-sm"
                 />
-                <div className="text-right">
-                  <span className="text-[10px] sm:text-xs font-mono font-extrabold text-emerald-400 block pb-0.5 leading-none">
+                <div className="text-left">
+                  <span className="text-[10px] sm:text-xs font-mono font-extrabold text-emerald-400 block leading-tight">
                     ₦{userProfile.balance.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                   </span>
-                  <span className="text-[7px] font-mono text-zinc-500 uppercase tracking-wider block leading-none">
-                    Gladiator
+                  <span className="text-[7px] sm:text-[8px] font-mono text-zinc-500 uppercase tracking-widest block leading-none font-semibold mt-0.5">
+                    Wallet Bal
                   </span>
                 </div>
               </div>
@@ -1458,6 +1897,9 @@ export default function App() {
               <button
                 onClick={() => {
                   setShowNotificationsPage(true);
+                  setShowAdminPage(false);
+                  setShowProfilePage(false);
+                  setGladiatorPage(false);
                   // Mark notifications as read
                   notifications.forEach(async (n) => {
                     if (!n.read && currentUser) {
@@ -1466,7 +1908,11 @@ export default function App() {
                     }
                   });
                 }}
-                className="relative p-2 bg-slate-950 hover:bg-[#111827] border border-gray-900 hover:border-amber-500/30 rounded-xl transition cursor-pointer text-gray-400 hover:text-white"
+                className={`relative p-2 bg-slate-950 border rounded-xl transition cursor-pointer text-gray-400 hover:text-white shrink-0 min-h-[38px] flex items-center justify-center ${
+                  showNotificationsPage 
+                    ? 'border-amber-500 text-amber-500 bg-[#111827]' 
+                    : 'border-gray-900 hover:border-amber-500/30 hover:bg-[#111827]/60'
+                }`}
                 title="Open Arena Notifications"
               >
                 <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
@@ -1475,23 +1921,13 @@ export default function App() {
                 )}
               </button>
 
-              {/* Top up Wallet Action Button */}
-              <button
-                onClick={() => setShowWallet(true)}
-                className="hidden sm:flex p-2 sm:px-3 sm:py-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold rounded-lg sm:rounded-xl text-[10px] uppercase font-mono transition cursor-pointer items-center gap-1 leading-none shadow-md shadow-emerald-950/10"
-                title="Deposit Coins"
-              >
-                <Coins className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Deposit</span>
-              </button>
-
-              {/* Simple logout button */}
+              {/* Responsive Logout Button - hidden on mobile view, visible on sm: screens and up */}
               <button
                 onClick={handleLogout}
-                className="hidden sm:block p-2 bg-red-950/20 hover:bg-red-950/45 border border-red-900/30 text-red-400 hover:text-red-350 transition rounded-xl cursor-pointer"
+                className="hidden sm:flex p-2 bg-red-950/15 hover:bg-red-950/40 border border-red-950/40 text-red-400 hover:text-red-300 transition rounded-xl cursor-pointer shrink-0 min-h-[38px] items-center justify-center"
                 title="Logout Account"
               >
-                <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <LogOut className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
               </button>
             </div>
           )}
@@ -1529,7 +1965,10 @@ export default function App() {
             onAcceptDraw={handleAcceptDraw}
             onDeclineDraw={handleDeclineDraw}
             onSendMessage={handleSendMessage}
-            onExitGame={() => setActiveMatch(null)}
+            onExitGame={() => {
+              setGameOutcomeAlert(null);
+              setActiveMatch(null);
+            }}
             onTimeout={handleTimeout}
           />
         ) : showNotificationsPage && userProfile ? (
@@ -1540,25 +1979,38 @@ export default function App() {
             onDeleteSingle={handleDeleteSingleNotification}
             onClose={() => setShowNotificationsPage(false)}
           />
+        ) : showAdminPage && userProfile && userProfile.email === 'simonodavido@gmail.com' ? (
+          <AdminPanel
+            users={allUsers}
+            currentUserId={currentUser.uid}
+            onUpdateUserBalance={handleUpdateUserBalance}
+            onUpdateUserStats={handleUpdateUserStats}
+            onResetAllBalances={handleResetAllBalances}
+            onClose={() => setShowAdminPage(false)}
+          />
         ) : selectedProfile ? (
           <ProfilePage
             userProfile={selectedProfile}
             currentUserId={currentUser.uid}
             onWithdraw={handleWithdrawFunds}
+            onDeposit={handleDepositWallet}
             onClose={() => setSelectedProfile(null)}
             onLogout={handleLogout}
             leaderboardUsers={leaderboardUsers}
             onViewProfile={(profile) => setSelectedProfile(profile)}
+            onResetAllBalances={handleResetAllBalances}
           />
         ) : showProfilePage && userProfile ? (
           <ProfilePage
             userProfile={userProfile}
             currentUserId={currentUser.uid}
             onWithdraw={handleWithdrawFunds}
+            onDeposit={handleDepositWallet}
             onClose={() => setShowProfilePage(false)}
             onLogout={handleLogout}
             leaderboardUsers={leaderboardUsers}
             onViewProfile={(profile) => setSelectedProfile(profile)}
+            onResetAllBalances={handleResetAllBalances}
           />
         ) : gladiatorPage && userProfile ? (
           <div className="space-y-6 animate-in fade-in duration-200">
@@ -1645,7 +2097,18 @@ export default function App() {
                 <div className="w-full flex">
                   <div className="animate-marquee flex gap-16 items-center whitespace-nowrap">
                     {/* Render first iteration */}
-                    {[...leaderboardUsers].sort((a,b) => ((b.wins * 3) + b.draws) - ((a.wins * 3) + a.draws)).slice(0, 20).map((u, idx) => {
+                    {[...leaderboardUsers].sort((a, b) => {
+                      const rankValA = a.rank !== undefined && a.rank !== null ? Number(a.rank) : (a.rating || 1200);
+                      const rankValB = b.rank !== undefined && b.rank !== null ? Number(b.rank) : (b.rating || 1200);
+                      
+                      if (rankValB !== rankValA) {
+                        return rankValB - rankValA;
+                      }
+                      if (b.wins !== a.wins) {
+                        return b.wins - a.wins;
+                      }
+                      return a.losses - b.losses;
+                    }).slice(0, 20).map((u, idx) => {
                       const rank = idx + 1;
                       let rankBadge = "🏆";
                       if (rank === 1) rankBadge = "👑";
@@ -1674,7 +2137,18 @@ export default function App() {
                       );
                     })}
                     {/* Render duplicate iteration to create infinite seamless loop */}
-                    {[...leaderboardUsers].sort((a,b) => ((b.wins * 3) + b.draws) - ((a.wins * 3) + a.draws)).slice(0, 20).map((u, idx) => {
+                    {[...leaderboardUsers].sort((a, b) => {
+                      const rankValA = a.rank !== undefined && a.rank !== null ? Number(a.rank) : (a.rating || 1200);
+                      const rankValB = b.rank !== undefined && b.rank !== null ? Number(b.rank) : (b.rating || 1200);
+                      
+                      if (rankValB !== rankValA) {
+                        return rankValB - rankValA;
+                      }
+                      if (b.wins !== a.wins) {
+                        return b.wins - a.wins;
+                      }
+                      return a.losses - b.losses;
+                    }).slice(0, 20).map((u, idx) => {
                       const rank = idx + 1;
                       let rankBadge = "🏆";
                       if (rank === 1) rankBadge = "👑";
@@ -1719,6 +2193,7 @@ export default function App() {
                 isLoading={isLobbyLoading}
                 onSpectateMatch={(match) => setActiveMatch(match)}
                 onStartComputerMatch={() => handleStartComputerMatch('15m', 'random')}
+                users={leaderboardUsers}
               />
             </div>
           </div>
@@ -1759,16 +2234,26 @@ export default function App() {
       )}
 
       {/* Duel Settled outcome alert popup */}
-      {gameOutcomeAlert && (
+      {gameOutcomeAlert && !activeMatch && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f121d] border border-amber-500/30 rounded-2xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in scale-in duration-150">
-            <div className="bg-gradient-to-r from-amber-950 to-slate-950 p-6 flex flex-col items-center text-center space-y-2 border-b border-amber-900/10">
-              <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center text-amber-500 text-lg">
+          <div className="bg-[#0f121d] border border-amber-500/50 rounded-2xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in scale-in duration-150">
+            <div className="bg-gradient-to-r from-amber-950 via-[#101424] to-slate-950 p-6 flex flex-col items-center text-center space-y-2 border-b border-amber-900/20">
+              <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center text-amber-500 text-lg shadow-[0_0_15px_rgba(245,158,11,0.2)]">
                 🏆
               </div>
-              <h4 className="font-display font-extrabold text-lg text-amber-500">Arena Duel Settled!</h4>
+              <h4 className="font-display font-extrabold text-lg text-amber-500 tracking-wide">Arena Duel Settled!</h4>
               <p className="text-[10px] text-zinc-500 font-mono tracking-wider uppercase">Lobby Escrow Released</p>
             </div>
+
+            {/* Sparkly Celebratory Win Toast effect naming the winner */}
+            {gameOutcomeAlert.status === 'completed' && gameOutcomeAlert.winnerName && (
+              <div className="bg-amber-500/10 border border-amber-500/35 rounded-xl p-3.5 mx-6 mt-4 text-center animate-pulse shadow-lg bg-gradient-to-r from-amber-950/20 to-slate-900/20">
+                <span className="text-[9px] font-mono text-amber-400 block uppercase tracking-widest font-extrabold font-bold">🏁 VICTORY CHAMPION 🏁</span>
+                <span className="font-sans font-black text-sm text-amber-250 block mt-1 tracking-wide uppercase">
+                  {gameOutcomeAlert.winnerName} Wins the Duel!
+                </span>
+              </div>
+            )}
 
             <div className="p-6 space-y-4 font-mono text-xs text-gray-300">
               <div className="bg-slate-950 p-4 rounded-xl border border-gray-900 space-y-2.5">

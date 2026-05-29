@@ -1,7 +1,7 @@
 {
   "name": "Chess Betting Game",
   "description": "A clean multiplayer chess game allowing users to play online and place bets using a virtual wallet system.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

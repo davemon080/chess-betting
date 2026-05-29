@@ -38,6 +38,21 @@ body {
   50% { opacity: 0.6; }
 }
 
+@keyframes destination-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.55;
+  }
+}
+
+.animate-destination-pulse {
+  animation: destination-pulse 1.8s ease-in-out infinite;
+}
+
 @keyframes marquee {
   0% {
     transform: translateX(0);
@@ -56,4 +71,42 @@ body {
 .animate-marquee:hover {
   animation-play-state: paused;
 }
+
+/* Premium Cinematic Chess Animations */
+@keyframes piece-land {
+  0% {
+    transform: translateY(-10px) scale(1.1);
+    opacity: 0.85;
+  }
+  60% {
+    transform: translateY(1.5px) scale(0.97);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-piece-landing {
+  animation: piece-land 0.3s cubic-bezier(0.215, 0.610, 0.355, 1) forwards;
+}
+
+@keyframes move-pulse {
+  0%, 100% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+.animate-move-to-pulse {
+  animation: move-pulse 2s ease-in-out infinite;
+}
+
+.animate-move-from-pulse {
+  animation: move-pulse 2s ease-in-out infinite;
+}
+
 
